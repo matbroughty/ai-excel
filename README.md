@@ -1,13 +1,17 @@
 # Excel Generator Application
 
-This Spring Boot application generates Excel reports containing ageing data by month. The application exposes a REST endpoint that returns an Excel file populated with data from a mocked API.
+This Spring Boot application generates Excel reports containing ageing data by month and customer information. The application exposes a REST endpoint that returns an Excel file populated with data from mocked APIs.
 
 ## Features
 
 - REST endpoint `/generate/{companyId}` that returns an Excel file
-- Mock data service that simulates retrieving data from an external API
+- Mock data services that simulate retrieving data from external APIs
 - Excel report generation using Apache POI
-- Report includes monthly ageing data with:
+- Multi-sheet Excel report with professional styling
+
+### Ageing Report Sheet
+
+The first sheet includes monthly ageing data with:
   - Sales Ledger Balance
   - Amount Not Due
   - Amount Over 30 Days Past Due
@@ -16,6 +20,44 @@ This Spring Boot application generates Excel reports containing ageing data by m
   - Amount Over Threshold
   - Total Credits
   - Percentage Over 90 Days Past Due
+
+### Customer List Sheet
+
+The second sheet contains a list of all customers/debtors with outstanding balances:
+  - Customer ID
+  - Customer Name
+  - Balance
+  - Reference
+  - Address Information (multiple fields)
+  - Notification Status
+  - Last Update Date
+  - Total Outstanding Balance summary
+
+### Open Items Sheet
+
+The third sheet details all open items (invoices, payments, credit notes) for customers:
+  - Customer ID and Name
+  - Document Type (color-coded: Invoices in black, Payments in blue, Credit Notes in red)
+  - Document Number and Reference
+  - Document Date, Due Date and Entry Date
+  - Entry User
+  - Amount and Balance (with negative values for payments and credit notes)
+  - Totals for Amount and Balance
+
+### Excel Theming Features
+
+The generated Excel reports include professional styling:
+
+- Corporate branded title section with report date
+- Professional blue theme for headers
+- Alternating row colors for improved readability
+- Color-coded negative values (displayed in red)
+- Summary rows with totals and averages
+- Automatic column sizing with padding
+- Frozen header panes for easier navigation
+- Auto-filtering in the Customer List sheet
+- Footer with contact information
+- Properly formatted currency, date, and percentage values
 
 ## Running the Application
 
@@ -33,6 +75,12 @@ This Spring Boot application generates Excel reports containing ageing data by m
    http://localhost:8080/generate/123
    ```
    Replace `123` with any company ID.
+
+   To specify a custom output path for saving the file to disk:
+   ```
+   http://localhost:8080/generate/123?outputPath=/path/to/save
+   ```
+   By default, files are saved to `/users/mathewbroughton` if no path is specified.
 
 ## Technologies Used
 
