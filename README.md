@@ -8,6 +8,8 @@ This Spring Boot application generates Excel reports containing ageing data by m
 - Mock data services that simulate retrieving data from external APIs
 - Excel report generation using Apache POI
 - Multi-sheet Excel report with professional styling
+- Summary dashboard with company information and key statistics
+- Data visualization with interactive charts
 
 ### Ageing Report Sheet
 
@@ -20,6 +22,9 @@ The first sheet includes monthly ageing data with:
   - Amount Over Threshold
   - Total Credits
   - Percentage Over 90 Days Past Due
+  - Interactive trend charts showing:
+    - Line chart of aging categories over time
+    - Column chart showing percentage of debt over 90 days
 
 ### Customer List Sheet
 
@@ -43,6 +48,16 @@ The third sheet details all open items (invoices, payments, credit notes) for cu
   - Entry User
   - Amount and Balance (with negative values for payments and credit notes)
   - Totals for Amount and Balance
+
+### Summary Sheet
+
+The first sheet provides a dashboard with key information:
+  - Company Information (name, business number, address)
+  - Contact Information (phone, email, website with hyperlink)
+  - Report Data (last data load date, report generation details)
+  - Summary Statistics (total debtors, active debtors, total open items)
+  - Financial Statistics (total outstanding, overdue, and over 90 days balances)
+  - Navigation links to other sheets
 
 ### Excel Theming Features
 

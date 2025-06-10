@@ -1,12 +1,14 @@
 package com.example.service;
 
 import com.example.model.AgeingByMonth;
+import com.example.model.CompanySummary;
 import com.example.model.Customer;
 import com.example.model.Item;
+import org.apache.poi.common.usermodel.HyperlinkType;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.ss.util.CellRangeAddress;
-import org.apache.poi.xssf.usermodel.XSSFColor;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.xddf.usermodel.chart.LegendPosition;
+import org.apache.poi.xssf.usermodel.*;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
@@ -14,6 +16,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
@@ -59,10 +62,46 @@ public class ExcelService {
      * @param itemData List of open items for customers
      * @return byte array containing the Excel file
      * @throws IOException if there's an error generating the Excel file
+     * @deprecated Use generateAgeingReport with CompanySummary instead
      */
     public byte[] generateAgeingReport(List<AgeingByMonth> ageingData, List<Customer> customerData, 
                                       List<Item> itemData) throws IOException {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            // Create the Ageing Report sheet
+            Sheet ageingSheet = workbook.createSheet("Ageing Report");
+            createAgeingReportSheet(workbook, ageingSheet, ageingData);
+
+            // Create the Customer List sheet
+            Sheet customerSheet = workbook.createSheet("Customer List");
+            createCustomerListSheet(workbook, customerSheet, customerData);
+
+            // Create the Open Items sheet
+            Sheet itemsSheet = workbook.createSheet("Open Items");
+            createOpenItemsSheet(workbook, itemsSheet, itemData, customerData);
+
+            // Write to byte array
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            workbook.write(outputStream);
+            return outputStream.toByteArray();
+        }
+    }
+
+    /**
+     * Generates an Excel report with four sheets: Summary, Ageing Report, Customer List, and Open Items
+     * @param ageingData List of ageing data by month
+     * @param customerData List of customers with outstanding balances
+     * @param itemData List of open items for customers
+     * @param companySummary Company summary information
+     * @return byte array containing the Excel file
+     * @throws IOException if there's an error generating the Excel file
+     */
+    public byte[] generateAgeingReport(List<AgeingByMonth> ageingData, List<Customer> customerData, 
+                                      List<Item> itemData, CompanySummary companySummary) throws IOException {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            // Create the Summary sheet (first sheet)
+            Sheet summarySheet = workbook.createSheet("Summary");
+            createSummarySheet(workbook, summarySheet, companySummary, customerData, itemData);
+
             // Create the Ageing Report sheet
             Sheet ageingSheet = workbook.createSheet("Ageing Report");
             createAgeingReportSheet(workbook, ageingSheet, ageingData);
@@ -82,6 +121,36 @@ public class ExcelService {
         }
     }
     
+    /**
+     * Creates a named range for a specific customer's items to enable easier filtering
+     * @param workbook The Excel workbook
+     * @param sheet The sheet containing the items
+     * @param customerId The customer ID to create a named range for
+     * @param firstDataRow The first row containing data (after headers)
+     * @param lastDataRow The last row containing data
+     */
+    private void createCustomerItemsNamedRange(XSSFWorkbook workbook, Sheet sheet, String customerId, int firstDataRow, int lastDataRow) {
+        // Create a named range that references all rows for this customer
+        // This allows for easier filtering and navigation
+        String safeCustomerId = customerId.replaceAll("[^a-zA-Z0-9]", ""); // Remove any characters that might cause issues in a name
+        String rangeName = "Customer_" + safeCustomerId;
+
+        // This would need to dynamically identify the rows that contain this customer's items
+        // For demonstration, we're just creating a named range for the whole data range
+        // In a real implementation, you'd need to identify the specific rows
+
+        // Note: Excel named ranges require absolute references with $ signs
+        // Format: SheetName!$A$1:$B$2
+        String reference = String.format("'%s'!$A$%d:$%s$%d", 
+                sheet.getSheetName(), firstDataRow, 
+                getColumnName(sheet.getRow(firstDataRow).getLastCellNum() - 1), lastDataRow);
+
+        // Create a name in the workbook and set its properties
+        org.apache.poi.ss.usermodel.Name name = workbook.createName();
+        name.setNameName(rangeName);
+        name.setRefersToFormula(reference);
+    }
+
     /**
      * Creates the Open Items sheet
      */
@@ -187,9 +256,13 @@ public class ExcelService {
             
             // Customer ID
             Cell customerIdCell = row.createCell(0);
+            String customerName = customerNames.get(item.getCustomerId());
+            if (customerName == null) {
+                // Log warning about missing customer
+                System.out.println("Warning: Customer ID " + item.getCustomerId() + " not found in customer data");
+            }
             customerIdCell.setCellValue(item.getCustomerId() + " - " + 
-                    (customerNames.containsKey(item.getCustomerId()) ? 
-                    customerNames.get(item.getCustomerId()) : "Unknown"));
+                    (customerName != null ? customerName : "Unknown"));
             customerIdCell.setCellStyle(rowTextStyle);
             
             // Document Type
@@ -291,20 +364,29 @@ public class ExcelService {
                 getColumnName(9), tableStartRow + 1, getColumnName(9), rowNum));
         totalBalanceCell.setCellStyle(totalAmountStyle);
         
-        // Add footer with info about color coding
+        // Add footer with info about color coding and filtering instructions
         Row footerRow = sheet.createRow(rowNum + 2);
         Cell footerCell = footerRow.createCell(0);
         footerCell.setCellValue("Color coding: Black = Invoices, Blue = Payments, Red = Credit Notes");
-        
+
         CellStyle footerStyle = workbook.createCellStyle();
         Font footerFont = workbook.createFont();
         footerFont.setItalic(true);
         footerFont.setColor(IndexedColors.GREY_50_PERCENT.getIndex());
         footerStyle.setFont(footerFont);
         footerCell.setCellStyle(footerStyle);
-        
+
         // Merge cells for the footer
         sheet.addMergedRegion(new CellRangeAddress(rowNum + 2, rowNum + 2, 0, ITEM_HEADERS.length - 1));
+
+        // Add filtering instructions in a second footer row
+        Row filterInstructionRow = sheet.createRow(rowNum + 3);
+        Cell filterInstructionCell = filterInstructionRow.createCell(0);
+        filterInstructionCell.setCellValue("Tip: Click the filter button (▼) in the Customer ID column header to filter items by specific customer.");
+        filterInstructionCell.setCellStyle(footerStyle);
+
+        // Merge cells for the instruction footer
+        sheet.addMergedRegion(new CellRangeAddress(rowNum + 3, rowNum + 3, 0, ITEM_HEADERS.length - 1));
         
         // Auto-size columns and add padding
         for (int i = 0; i < ITEM_HEADERS.length; i++) {
@@ -343,6 +425,8 @@ public class ExcelService {
      * Creates the Ageing Report sheet
      */
     private void createAgeingReportSheet(XSSFWorkbook workbook, Sheet sheet, List<AgeingByMonth> ageingData) {
+        // Sort the data in chronological order for better chart visualization
+        ageingData.sort((a, b) -> a.getMonth().compareTo(b.getMonth()));
         // Create title and branding section
         createTitleSection(workbook, sheet, ageingData.size() > 0 ? ageingData.get(0).getMonth() : null);
         
@@ -434,6 +518,9 @@ public class ExcelService {
         
         // Freeze the header row
         sheet.createFreezePane(0, tableStartRow + 1);
+
+        // Add a chart showing aging trends
+        addAgeingTrendChart(workbook, sheet, tableStartRow + 1, rowNum - 1, ageingData.size());
     }
     
     /**
@@ -485,12 +572,14 @@ public class ExcelService {
         
         // Create styles for data rows
         CellStyle textCellStyle = createTextCellStyle(workbook);
+        CellStyle hyperlinkStyle = createHyperlinkStyle(workbook);
         CellStyle currencyCellStyle = createCurrencyStyle(workbook);
         CellStyle dateCellStyle = createDateCellStyle(workbook);
         CellStyle booleanCellStyle = createBooleanCellStyle(workbook);
         
         // Create alternating row styles
         CellStyle alternateRowTextCellStyle = createAlternateRowStyle(workbook, textCellStyle);
+        CellStyle alternateRowHyperlinkStyle = createAlternateRowStyle(workbook, hyperlinkStyle);
         CellStyle alternateRowCurrencyCellStyle = createAlternateRowStyle(workbook, currencyCellStyle);
         CellStyle alternateRowDateCellStyle = createAlternateRowStyle(workbook, dateCellStyle);
         CellStyle alternateRowBooleanCellStyle = createAlternateRowStyle(workbook, booleanCellStyle);
@@ -507,10 +596,25 @@ public class ExcelService {
             CellStyle rowDateStyle = isAlternateRow ? alternateRowDateCellStyle : dateCellStyle;
             CellStyle rowBooleanStyle = isAlternateRow ? alternateRowBooleanCellStyle : booleanCellStyle;
             
-            // Customer ID
+            // Customer ID with hyperlink to Open Items sheet
             Cell idCell = row.createCell(0);
             idCell.setCellValue(customer.getCustomerId());
-            idCell.setCellStyle(rowTextStyle);
+
+            // Create hyperlink to Open Items sheet filtering for this customer
+            CreationHelper createHelper = workbook.getCreationHelper();
+            XSSFHyperlink link = (XSSFHyperlink) createHelper.createHyperlink(HyperlinkType.DOCUMENT);
+
+            // Since Excel doesn't support programmatically applying filters through hyperlinks,
+            // we'll create a hyperlink that takes the user to the correct sheet and provide
+            // instructions on how to filter
+            String customerId = customer.getCustomerId();
+            link.setAddress("'Open Items'!A4"); // Link to header row of Open Items sheet where filter controls are
+
+            // Add a helpful tooltip with instructions
+            link.setTooltip("Click to view Open Items, then filter by Customer ID: " + customerId);
+
+            idCell.setHyperlink(link);
+            idCell.setCellStyle(isAlternateRow ? alternateRowHyperlinkStyle : hyperlinkStyle); // Apply appropriate hyperlink style
             
             // Customer Name
             Cell nameCell = row.createCell(1);
@@ -619,6 +723,21 @@ public class ExcelService {
         // Add filter to headers
         sheet.setAutoFilter(new CellRangeAddress(
                 tableStartRow, tableStartRow, 0, CUSTOMER_HEADERS.length - 1));
+
+        // Add footer with info about hyperlinks
+        Row hyperlinkInfoRow = sheet.createRow(rowNum + 2);
+        Cell hyperlinkInfoCell = hyperlinkInfoRow.createCell(0);
+        hyperlinkInfoCell.setCellValue("Click on Customer IDs to view their open items in the 'Open Items' sheet");
+
+        CellStyle hyperlinkInfoStyle = workbook.createCellStyle();
+        Font hyperlinkInfoFont = workbook.createFont();
+        hyperlinkInfoFont.setItalic(true);
+        hyperlinkInfoFont.setColor(IndexedColors.GREY_50_PERCENT.getIndex());
+        hyperlinkInfoStyle.setFont(hyperlinkInfoFont);
+        hyperlinkInfoCell.setCellStyle(hyperlinkInfoStyle);
+
+        // Merge cells for the hyperlink info
+        sheet.addMergedRegion(new CellRangeAddress(rowNum + 2, rowNum + 2, 0, CUSTOMER_HEADERS.length - 1));
     }
     
     /**
@@ -631,6 +750,18 @@ public class ExcelService {
         style.setBorderLeft(BorderStyle.THIN);
         style.setBorderRight(BorderStyle.THIN);
         style.setVerticalAlignment(VerticalAlignment.CENTER);
+        return style;
+    }
+
+    /**
+     * Creates a hyperlink text cell style
+     */
+    private CellStyle createHyperlinkStyle(Workbook workbook) {
+        CellStyle style = createTextCellStyle(workbook);
+        Font hyperlinkFont = workbook.createFont();
+        hyperlinkFont.setUnderline(Font.U_SINGLE);
+        hyperlinkFont.setColor(IndexedColors.BLUE.getIndex());
+        style.setFont(hyperlinkFont);
         return style;
     }
     
@@ -916,6 +1047,459 @@ public class ExcelService {
         return style;
     }
     
+    /**
+     * Creates the Summary sheet with company information and report statistics
+     */
+    private void createSummarySheet(XSSFWorkbook workbook, Sheet sheet, CompanySummary summary,
+                                   List<Customer> customerData, List<Item> itemData) {
+        // Set column widths for better readability
+        sheet.setColumnWidth(0, 6000);
+        sheet.setColumnWidth(1, 8000);
+
+        // Create styles
+        CellStyle headerStyle = workbook.createCellStyle();
+        headerStyle.setAlignment(HorizontalAlignment.LEFT);
+        Font headerFont = workbook.createFont();
+        headerFont.setBold(true);
+        headerFont.setFontHeightInPoints((short) 12);
+        headerFont.setColor(IndexedColors.DARK_BLUE.getIndex());
+        headerStyle.setFont(headerFont);
+
+        CellStyle labelStyle = workbook.createCellStyle();
+        labelStyle.setAlignment(HorizontalAlignment.LEFT);
+        Font labelFont = workbook.createFont();
+        labelFont.setBold(true);
+        labelStyle.setFont(labelFont);
+
+        CellStyle valueStyle = workbook.createCellStyle();
+        valueStyle.setAlignment(HorizontalAlignment.LEFT);
+
+        CellStyle currencyStyle = createCurrencyStyle(workbook);
+        currencyStyle.setBorderBottom(BorderStyle.NONE);
+        currencyStyle.setBorderTop(BorderStyle.NONE);
+        currencyStyle.setBorderLeft(BorderStyle.NONE);
+        currencyStyle.setBorderRight(BorderStyle.NONE);
+
+        CellStyle dateTimeStyle = workbook.createCellStyle();
+        dateTimeStyle.setAlignment(HorizontalAlignment.LEFT);
+        CreationHelper createHelper = workbook.getCreationHelper();
+        dateTimeStyle.setDataFormat(createHelper.createDataFormat().getFormat("yyyy-MM-dd HH:mm:ss"));
+
+        CellStyle sectionHeaderStyle = workbook.createCellStyle();
+        sectionHeaderStyle.setAlignment(HorizontalAlignment.LEFT);
+        sectionHeaderStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+        sectionHeaderStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        Font sectionFont = workbook.createFont();
+        sectionFont.setBold(true);
+        sectionFont.setFontHeightInPoints((short) 11);
+        sectionHeaderStyle.setFont(sectionFont);
+
+        // Title
+        Row titleRow = sheet.createRow(0);
+        titleRow.setHeightInPoints(30);
+        Cell titleCell = titleRow.createCell(0);
+        titleCell.setCellValue("COMPANY SUMMARY REPORT");
+
+        CellStyle titleStyle = workbook.createCellStyle();
+        titleStyle.setAlignment(HorizontalAlignment.CENTER);
+        Font titleFont = workbook.createFont();
+        titleFont.setBold(true);
+        titleFont.setFontHeightInPoints((short) 16);
+        titleFont.setColor(IndexedColors.DARK_BLUE.getIndex());
+        titleStyle.setFont(titleFont);
+        titleCell.setCellStyle(titleStyle);
+
+        sheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 1));
+
+        int rowNum = 2;
+
+        // Company Information Section
+        Row sectionRow = sheet.createRow(rowNum++);
+        Cell sectionCell = sectionRow.createCell(0);
+        sectionCell.setCellValue("Company Information");
+        sectionCell.setCellStyle(sectionHeaderStyle);
+        sheet.addMergedRegion(new CellRangeAddress(rowNum-1, rowNum-1, 0, 1));
+
+        // Company Name
+        Row nameRow = sheet.createRow(rowNum++);
+        Cell nameLabel = nameRow.createCell(0);
+        nameLabel.setCellValue("Company Name:");
+        nameLabel.setCellStyle(labelStyle);
+        Cell nameValue = nameRow.createCell(1);
+        nameValue.setCellValue(summary.getCompanyName());
+        nameValue.setCellStyle(valueStyle);
+
+        // Business Number
+        Row bnRow = sheet.createRow(rowNum++);
+        Cell bnLabel = bnRow.createCell(0);
+        bnLabel.setCellValue("Business Number:");
+        bnLabel.setCellStyle(labelStyle);
+        Cell bnValue = bnRow.createCell(1);
+        bnValue.setCellValue(summary.getBusinessNumber());
+        bnValue.setCellStyle(valueStyle);
+
+        // Address
+        Row addressRow = sheet.createRow(rowNum++);
+        Cell addressLabel = addressRow.createCell(0);
+        addressLabel.setCellValue("Address:");
+        addressLabel.setCellStyle(labelStyle);
+        Cell addressValue = addressRow.createCell(1);
+        addressValue.setCellValue(summary.getAddress());
+        addressValue.setCellStyle(valueStyle);
+
+        // City, State, Postal Code
+        Row cityRow = sheet.createRow(rowNum++);
+        Cell cityLabel = cityRow.createCell(0);
+        cityLabel.setCellValue("City, State, Postal Code:");
+        cityLabel.setCellStyle(labelStyle);
+        Cell cityValue = cityRow.createCell(1);
+        cityValue.setCellValue(summary.getCity() + ", " + summary.getState() + " " + summary.getPostalCode());
+        cityValue.setCellStyle(valueStyle);
+
+        // Country
+        Row countryRow = sheet.createRow(rowNum++);
+        Cell countryLabel = countryRow.createCell(0);
+        countryLabel.setCellValue("Country:");
+        countryLabel.setCellStyle(labelStyle);
+        Cell countryValue = countryRow.createCell(1);
+        countryValue.setCellValue(summary.getCountry());
+        countryValue.setCellStyle(valueStyle);
+
+        // Contact Information
+        Row contactSectionRow = sheet.createRow(rowNum++);
+        Cell contactSectionCell = contactSectionRow.createCell(0);
+        contactSectionCell.setCellValue("Contact Information");
+        contactSectionCell.setCellStyle(sectionHeaderStyle);
+        sheet.addMergedRegion(new CellRangeAddress(rowNum-1, rowNum-1, 0, 1));
+
+        // Phone
+        Row phoneRow = sheet.createRow(rowNum++);
+        Cell phoneLabel = phoneRow.createCell(0);
+        phoneLabel.setCellValue("Phone:");
+        phoneLabel.setCellStyle(labelStyle);
+        Cell phoneValue = phoneRow.createCell(1);
+        phoneValue.setCellValue(summary.getPhone());
+        phoneValue.setCellStyle(valueStyle);
+
+        // Email
+        Row emailRow = sheet.createRow(rowNum++);
+        Cell emailLabel = emailRow.createCell(0);
+        emailLabel.setCellValue("Email:");
+        emailLabel.setCellStyle(labelStyle);
+        Cell emailValue = emailRow.createCell(1);
+        emailValue.setCellValue(summary.getEmail());
+        emailValue.setCellStyle(valueStyle);
+
+        // Website with hyperlink
+        Row websiteRow = sheet.createRow(rowNum++);
+        Cell websiteLabel = websiteRow.createCell(0);
+        websiteLabel.setCellValue("Website:");
+        websiteLabel.setCellStyle(labelStyle);
+        Cell websiteValue = websiteRow.createCell(1);
+        websiteValue.setCellValue(summary.getWebsite());
+
+        // Create hyperlink for website
+        CreationHelper helper = workbook.getCreationHelper();
+        XSSFHyperlink link = (XSSFHyperlink)helper.createHyperlink(HyperlinkType.URL);
+        link.setAddress("https://" + summary.getWebsite());
+        websiteValue.setHyperlink(link);
+
+        // Apply hyperlink style
+        CellStyle hyperlinkStyle = createHyperlinkStyle(workbook);
+        hyperlinkStyle.setBorderBottom(BorderStyle.NONE);
+        hyperlinkStyle.setBorderTop(BorderStyle.NONE);
+        hyperlinkStyle.setBorderLeft(BorderStyle.NONE);
+        hyperlinkStyle.setBorderRight(BorderStyle.NONE);
+        websiteValue.setCellStyle(hyperlinkStyle);
+
+        // Add a space row
+        rowNum++;
+
+        // Report Data Section
+        Row reportSectionRow = sheet.createRow(rowNum++);
+        Cell reportSectionCell = reportSectionRow.createCell(0);
+        reportSectionCell.setCellValue("Report Data");
+        reportSectionCell.setCellStyle(sectionHeaderStyle);
+        sheet.addMergedRegion(new CellRangeAddress(rowNum-1, rowNum-1, 0, 1));
+
+        // Last Data Load Date
+        Row loadDateRow = sheet.createRow(rowNum++);
+        Cell loadDateLabel = loadDateRow.createCell(0);
+        loadDateLabel.setCellValue("Last Data Load Date:");
+        loadDateLabel.setCellStyle(labelStyle);
+        Cell loadDateValue = loadDateRow.createCell(1);
+
+        // Format the date properly
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        loadDateValue.setCellValue(summary.getLastDataLoadDate().format(formatter));
+        loadDateValue.setCellStyle(dateTimeStyle);
+
+        // Report Generated By
+        Row generatedByRow = sheet.createRow(rowNum++);
+        Cell generatedByLabel = generatedByRow.createCell(0);
+        generatedByLabel.setCellValue("Report Generated By:");
+        generatedByLabel.setCellStyle(labelStyle);
+        Cell generatedByValue = generatedByRow.createCell(1);
+        generatedByValue.setCellValue(summary.getReportGeneratedBy());
+        generatedByValue.setCellStyle(valueStyle);
+
+        // Add a space row
+        rowNum++;
+
+        // Summary Statistics Section
+        Row statsSectionRow = sheet.createRow(rowNum++);
+        Cell statsSectionCell = statsSectionRow.createCell(0);
+        statsSectionCell.setCellValue("Summary Statistics");
+        statsSectionCell.setCellStyle(sectionHeaderStyle);
+        sheet.addMergedRegion(new CellRangeAddress(rowNum-1, rowNum-1, 0, 1));
+
+        // Calculate actual values from data
+        int actualTotalDebtors = customerData.size();
+        int actualActiveDebtors = (int) customerData.stream()
+                .filter(c -> c.getBalance().compareTo(BigDecimal.ZERO) > 0)
+                .count();
+        int actualTotalItems = itemData.size();
+
+        BigDecimal actualTotalOutstanding = customerData.stream()
+                .map(Customer::getBalance)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // Use values from summary object or calculated values
+
+        // Total Debtors
+        Row totalDebtorsRow = sheet.createRow(rowNum++);
+        Cell totalDebtorsLabel = totalDebtorsRow.createCell(0);
+        totalDebtorsLabel.setCellValue("Total Debtors:");
+        totalDebtorsLabel.setCellStyle(labelStyle);
+        Cell totalDebtorsValue = totalDebtorsRow.createCell(1);
+        totalDebtorsValue.setCellValue(actualTotalDebtors);
+        totalDebtorsValue.setCellStyle(valueStyle);
+
+        // Active Debtors
+        Row activeDebtorsRow = sheet.createRow(rowNum++);
+        Cell activeDebtorsLabel = activeDebtorsRow.createCell(0);
+        activeDebtorsLabel.setCellValue("Active Debtors:");
+        activeDebtorsLabel.setCellStyle(labelStyle);
+        Cell activeDebtorsValue = activeDebtorsRow.createCell(1);
+        activeDebtorsValue.setCellValue(actualActiveDebtors);
+        activeDebtorsValue.setCellStyle(valueStyle);
+
+        // Total Open Items
+        Row openItemsRow = sheet.createRow(rowNum++);
+        Cell openItemsLabel = openItemsRow.createCell(0);
+        openItemsLabel.setCellValue("Total Open Items:");
+        openItemsLabel.setCellStyle(labelStyle);
+        Cell openItemsValue = openItemsRow.createCell(1);
+        openItemsValue.setCellValue(actualTotalItems);
+        openItemsValue.setCellStyle(valueStyle);
+
+        // Financial Statistics Section
+        Row financialSectionRow = sheet.createRow(rowNum++);
+        Cell financialSectionCell = financialSectionRow.createCell(0);
+        financialSectionCell.setCellValue("Financial Statistics");
+        financialSectionCell.setCellStyle(sectionHeaderStyle);
+        sheet.addMergedRegion(new CellRangeAddress(rowNum-1, rowNum-1, 0, 1));
+
+        // Total Outstanding Balance
+        Row outstandingRow = sheet.createRow(rowNum++);
+        Cell outstandingLabel = outstandingRow.createCell(0);
+        outstandingLabel.setCellValue("Total Outstanding Balance:");
+        outstandingLabel.setCellStyle(labelStyle);
+        Cell outstandingValue = outstandingRow.createCell(1);
+        outstandingValue.setCellValue(actualTotalOutstanding.doubleValue());
+        outstandingValue.setCellStyle(currencyStyle);
+
+        // Total Overdue Balance
+        Row overdueRow = sheet.createRow(rowNum++);
+        Cell overdueLabel = overdueRow.createCell(0);
+        overdueLabel.setCellValue("Total Overdue Balance:");
+        overdueLabel.setCellStyle(labelStyle);
+        Cell overdueValue = overdueRow.createCell(1);
+        overdueValue.setCellValue(summary.getTotalOverdueBalance().doubleValue());
+        overdueValue.setCellStyle(currencyStyle);
+
+        // Total Over 90 Days Balance
+        Row over90Row = sheet.createRow(rowNum++);
+        Cell over90Label = over90Row.createCell(0);
+        over90Label.setCellValue("Total Over 90 Days Balance:");
+        over90Label.setCellStyle(labelStyle);
+        Cell over90Value = over90Row.createCell(1);
+        over90Value.setCellValue(summary.getTotalOver90DaysBalance().doubleValue());
+        over90Value.setCellStyle(currencyStyle);
+
+        // Add a space row
+        rowNum++;
+
+        // Navigation Section
+        Row navSectionRow = sheet.createRow(rowNum++);
+        Cell navSectionCell = navSectionRow.createCell(0);
+        navSectionCell.setCellValue("Report Navigation");
+        navSectionCell.setCellStyle(sectionHeaderStyle);
+        sheet.addMergedRegion(new CellRangeAddress(rowNum-1, rowNum-1, 0, 1));
+
+        // Add hyperlinks to other sheets
+        String[] sheetNames = {"Ageing Report", "Customer List", "Open Items"};
+        for (String sheetName : sheetNames) {
+            Row navRow = sheet.createRow(rowNum++);
+            Cell navLabel = navRow.createCell(0);
+            navLabel.setCellValue("Go to " + sheetName + " sheet");
+
+            // Create hyperlink to the sheet
+            XSSFHyperlink sheetLink = (XSSFHyperlink)helper.createHyperlink(HyperlinkType.DOCUMENT);
+            sheetLink.setAddress("'" + sheetName + "'!A1");
+            navLabel.setHyperlink(sheetLink);
+            navLabel.setCellStyle(hyperlinkStyle);
+        }
+
+        // Add footer with report date
+        Row footerRow = sheet.createRow(rowNum + 2);
+        Cell footerCell = footerRow.createCell(0);
+        footerCell.setCellValue("Report generated on: " + LocalDate.now().format(DateTimeFormatter.ofPattern("MMMM d, yyyy")));
+
+        CellStyle footerStyle = workbook.createCellStyle();
+        Font footerFont = workbook.createFont();
+        footerFont.setItalic(true);
+        footerFont.setColor(IndexedColors.GREY_50_PERCENT.getIndex());
+        footerStyle.setFont(footerFont);
+        footerCell.setCellStyle(footerStyle);
+
+        sheet.addMergedRegion(new CellRangeAddress(rowNum + 2, rowNum + 2, 0, 1));
+    }
+
+    /**
+     * Adds a line chart showing aging trends over time
+     * @param workbook The workbook to add the chart to
+     * @param sheet The sheet to add the chart to
+     * @param firstDataRow The first row containing data
+     * @param lastDataRow The last row containing data
+     * @param numMonths The number of months of data
+     */
+    private void addAgeingTrendChart(XSSFWorkbook workbook, Sheet sheet, int firstDataRow, int lastDataRow, int numMonths) {
+        // Position the chart below the data table with some padding
+        int chartStartRow = lastDataRow + 4; // Leave a few rows after the summary row
+
+        // Create drawing canvas
+        Drawing<?> drawing = sheet.createDrawingPatriarch();
+
+        // Create client anchor with top-left and bottom-right coordinates
+        // Parameters: first row, first column, last row, last column
+        ClientAnchor anchor = drawing.createAnchor(0, 0, 0, 0, 0, chartStartRow, 8, chartStartRow + 20);
+
+        // Create the chart
+        Chart chart = drawing.createChart(anchor);
+        chart.setTitleText("Ageing Trends Over Time");
+        chart.setTitleOverlay(false);
+
+        // Create legend
+        ChartLegend legend = chart.getOrCreateLegend();
+        legend.setPosition(LegendPosition.BOTTOM);
+
+        // Create line chart data sources
+        // We'll reverse the order since the data is in reverse chronological order
+        // but we want the chart to show chronological progression
+
+        // Create data sources for X axis (months) and Y axes (values)
+        ChartDataSource<String> xs = DataSources.fromStringCellRange(
+                sheet, new CellRangeAddress(firstDataRow, firstDataRow + numMonths - 1, 0, 0));
+
+        // Create data sources for aging categories
+        ChartDataSource<Number> salesLedger = DataSources.fromNumericCellRange(
+                sheet, new CellRangeAddress(firstDataRow, firstDataRow + numMonths - 1, 1, 1));
+        ChartDataSource<Number> notDue = DataSources.fromNumericCellRange(
+                sheet, new CellRangeAddress(firstDataRow, firstDataRow + numMonths - 1, 2, 2));
+        ChartDataSource<Number> over30Days = DataSources.fromNumericCellRange(
+                sheet, new CellRangeAddress(firstDataRow, firstDataRow + numMonths - 1, 3, 3));
+        ChartDataSource<Number> over60Days = DataSources.fromNumericCellRange(
+                sheet, new CellRangeAddress(firstDataRow, firstDataRow + numMonths - 1, 4, 4));
+        ChartDataSource<Number> over90Days = DataSources.fromNumericCellRange(
+                sheet, new CellRangeAddress(firstDataRow, firstDataRow + numMonths - 1, 5, 5));
+
+        // Create line chart
+        LineChartData data = chart.getChartDataFactory().createLineChartData();
+
+        // Create line chart series
+        ChartSeries series1 = data.addSeries(xs, salesLedger);
+        series1.setTitle("Sales Ledger Balance");
+
+        ChartSeries series2 = data.addSeries(xs, notDue);
+        series2.setTitle("Amount Not Due");
+
+        ChartSeries series3 = data.addSeries(xs, over30Days);
+        series3.setTitle("Over 30 Days");
+
+        ChartSeries series4 = data.addSeries(xs, over60Days);
+        series4.setTitle("Over 60 Days");
+
+        ChartSeries series5 = data.addSeries(xs, over90Days);
+        series5.setTitle("Over 90 Days");
+
+        // Configure axes
+        chart.plot(data);
+
+        // Set axis titles
+        ChartAxis bottomAxis = chart.getChartAxisFactory().createCategoryAxis(org.apache.poi.ss.usermodel.charts.AxisPosition.BOTTOM);
+        bottomAxis.setTitle("Month");
+
+        ValueAxis leftAxis = chart.getChartAxisFactory().createValueAxis(org.apache.poi.ss.usermodel.charts.AxisPosition.LEFT);
+        leftAxis.setTitle("Amount");
+
+        // Add a second chart showing percentage over 90 days
+        addPercentageChart(workbook, sheet, firstDataRow, lastDataRow, numMonths, chartStartRow);
+    }
+
+    /**
+     * Adds a column chart showing percentage over 90 days
+     * @param workbook The workbook to add the chart to
+     * @param sheet The sheet to add the chart to
+     * @param firstDataRow The first row containing data
+     * @param lastDataRow The last row containing data
+     * @param numMonths The number of months of data
+     * @param startRow The row to start the chart at
+     */
+    private void addPercentageChart(XSSFWorkbook workbook, Sheet sheet, int firstDataRow, int lastDataRow, int numMonths, int startRow) {
+        // Create drawing canvas
+        Drawing<?> drawing = sheet.createDrawingPatriarch();
+
+        // Create client anchor with top-left and bottom-right coordinates
+        // Place this chart to the right of the line chart
+        ClientAnchor anchor = drawing.createAnchor(0, 0, 0, 0, 9, startRow, 16, startRow + 20);
+
+        // Create the chart
+        Chart chart = drawing.createChart(anchor);
+        chart.setTitleText("Percentage Over 90 Days");
+        chart.setTitleOverlay(false);
+
+        // Create data sources for X axis (months) and Y axis (percentage over 90 days)
+        ChartDataSource<String> xs = DataSources.fromStringCellRange(
+                sheet, new CellRangeAddress(firstDataRow, firstDataRow + numMonths - 1, 0, 0));
+        ChartDataSource<Number> percentages = DataSources.fromNumericCellRange(
+                sheet, new CellRangeAddress(firstDataRow, firstDataRow + numMonths - 1, 8, 8));
+
+        // Create column chart
+        BarChartData data = chart.getChartDataFactory().createBarChartData();
+
+        // Create column chart series
+        ChartSeries series = data.addSeries(xs, percentages);
+        series.setTitle("% Over 90 Days");
+
+        // Set bar direction to vertical (column chart)
+        data.setBarDirection(BarDirection.COL);
+
+        // Configure axes
+        chart.plot(data);
+
+        // Set axis titles
+        ChartAxis bottomAxis = chart.getChartAxisFactory().createCategoryAxis(AxisPosition.BOTTOM);
+        bottomAxis.setTitle("Month");
+
+        ValueAxis leftAxis = chart.getChartAxisFactory().createValueAxis(AxisPosition.LEFT);
+        leftAxis.setTitle("Percentage");
+
+        // Format the left axis as percentage
+        leftAxis.setCrosses(AxisCrosses.AUTO_ZERO);
+        leftAxis.setNumberFormat("0.00%");
+    }
+
     /**
      * Creates alternating row style based on another style
      */
